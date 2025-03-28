@@ -316,7 +316,6 @@ clients.forEach(client => {
     console.log(`[Client] 🧑‍🤝‍🧑 New Remote Client: ${remoteClientId}, Session: ${remoteSessionId}, track1: ${trackName}, track2: ${trackName1}`);
 });
 
-            setTimeout(() => {
                 console.log("[Client] 🔄 Pulling tracks from Calls API...");
 
                 if (transceivers.length === 0) {
@@ -343,7 +342,6 @@ clients.forEach(client => {
                     sessionId: sessionId,
                     body: { tracks: trackData }
                 }));
-            }, 1000);
         }
 
         function generateClientId() {
