@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloudflare WebRTC Multi-User</title>
+    <style>
+        body {
+            background-color: rgb(47, 41, 41);
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            color: white;
+            margin-bottom: 20px;
+        }
+
+        h2{
+            color: white;
+        }
+
+        #videoContainer {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        video {
+            width: 320px;
+            height: 240px;
+            margin: 10px;
+            border: 2.5px solid #ccc;
+            object-fit: cover;
+            border-radius: 20px;
+        }
+
+        #controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 5px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        #remoteVideos {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .video-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 10px;
+        }
+
+        .video-id {
+            font-size: 0.8em;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Cloudflare WebRTC Multi-User Video Call</h1>
+
+    <div id="videoContainer">
+        <div class="video-wrapper">
+            <h2>Local Video</h2>
+            <video id="localVideo" autoplay muted playsinline></video>
+            <div class="video-id">
+                <p>Client ID: <span id="localClientId"></span></p>
+                <p>Session ID: <span id="localSessionId"></span></p>
+                <p>Track ID 1: <span id="localTrackId"></span></p>
+                <p>Track ID 2: <span id="localTrackId1"></span></p>
+            </div>
+        </div>
+
+        
+    </div>
+
+    <div id="controls">
+        <button id="muteAudio">Mute Audio</button>
+        <button id="muteVideo">Mute Video</button>
+        <button id="hangUp">Hang Up</button>
+    </div>
+
+    <h2>Remote Videos</h2>
+    <div id="remoteVideos"></div>
+    <script>
+        const ws = new WebSocket('ws://localhost:3000'); // WebSocket connection
+        let clientId;
+        let sessionId;
+        let transceivers = [];
+        const ROOM_ID = "default-room";
+        let remoteAnswer = "";  // Store remote answer for debugging
+        let isAudioMuted = false;
+        let isVideoMuted = false;
+        const remoteStreams = {};  // Store remote streams by client ID
+
+        const peerConnection = new RTCPeerConnection({
+            iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }]
+        });
+
+        peerConnection.ontrack = (event) => {
+            console.log(`[Client] 📡 Received remote track:`, event);
+            const remoteClientId = event.track.id.split('-')[0];
+
+            if (!remoteStreams[remoteClientId]) {
+                remoteStreams[remoteClientId] = new MediaStream();
+            }
+            remoteStreams[remoteClientId].addTrack(event.track);
+
+            let remoteVideo = document.getElementById(`video-${remoteClientId}`);
+            if (!remoteVideo ) {
+                remoteVideo = document.createElement('video');
+                remoteVideo.id = `video-${remoteClientId}`;
+                remoteVideo.autoplay = true;
+                remoteVideo.playsInline = true;
+                if(event.track.kind === 'audio') {
+                    remoteVideo.style.display = 'none';
+                    remoteVideo.style.width = '0px';
+                    remoteVideo.style.height = '0px';
+                }
+
+
+                const videoWrapper = document.createElement('div');
+                videoWrapper.className = 'video-wrapper';
+                videoWrapper.appendChild(remoteVideo);
+                const videoId = document.createElement('div');
+                videoId.className = 'video-id';
+                videoId.textContent = `Client ID: ${remoteClientId}`;
+                videoWrapper.appendChild(videoId);
+                if(event.track.kind === 'audio') {
+                    videoWrapper.style.display = 'none';
+                    videoWrapper.style.width = '0px';
+                    videoWrapper.style.height = '0px';
+                }
+                document.getElementById('remoteVideos').appendChild(videoWrapper);
+            }
+            remoteVideo.srcObject = remoteStreams[remoteClientId];
+
+
+        };
+
+        ws.addEventListener('open', () => {
+            console.log('[Client] ✅ WebSocket connected');
+            clientId = generateClientId();
+            document.getElementById('localClientId').textContent = clientId;
+            startWebRTC();
+        });
+
+        ws.addEventListener('message', async (event) => {
+            const message = JSON.parse(event.data);
+
+            if (message.type === 'trackAdded') {
+                sessionId = message.sessionId;
+                const trackId = message.response.tracks[0]?.trackName || "N/A";
+                const trackId1 = message.response.tracks[1]?.trackName || "N/A";
+
+                document.getElementById('localSessionId').textContent = sessionId;
+                document.getElementById('localTrackId').textContent = trackId;
+                document.getElementById('localTrackId1').textContent = trackId1;
+                console.log(`[Client] 🔑 Cloudflare session created: ${sessionId}, Track1: ${trackId}, Track2: ${trackId1}`);
+
+
+            } else if (message.type === 'remoteClientConnected') {
+                handleRemoteClient(message);
+
+            }
+
+
+            if (message.type === 'trackAdded') {
+                console.log(peerConnection);
+                console.log(`[Client] 🔗 Created PeerConnection for ${clientId}`);
+                console.log(`[Client] 🔄 Received Answer from SFU, setting remote description...`);
+
+                try {
+                    await peerConnection.setRemoteDescription(
+                        new RTCSessionDescription(message.response.sessionDescription)
+                    );
+                    console.log(`[Client] ✅ Remote Description set`);
+                } catch (error) {
+                    console.error(`[Client] ❌ Error setting remote description:`, error);
+                }
+
+
+                // Define this event only once
+                peerConnection.oniceconnectionstatechange = () => {
+                    if (peerConnection.iceConnectionState === "connected") {
+                        console.log("ICE connection established. Sending track data...");
+
+                        const trackData = peerConnection.getTransceivers().map(transceiver => ({
+                            trackName: transceiver.sender.track?.id || "unknown-track",
+                        }));
+                        
+                        ws.send(JSON.stringify({
+                            type: 'clientConnected',
+                            clientId: clientId,
+                            sessionId: sessionId,
+                            trackData: trackData
+                        }));
+                    }
+                };
+
+
+            } else if (message.type === 'pullTracksResponse') {
+                console.log("[Client] 📡 Tracks pulled successfully:", message.data);
+
+                // Delay renegotiation slightly to ensure remote side is ready.
+
+
+                try {
+                    console.log(`[Client] 🔄 Setting remote description with pullTracksResponse`);
+
+                    await peerConnection.setRemoteDescription(
+                        new RTCSessionDescription(message.data.sessionDescription)
+                    );
+                    console.log(`[Client] ✅ Remote Description set from pullTracksResponse`);
+
+                    console.log(`[Client] 🔄 Creating answer...`);
+                    remoteAnswer = await peerConnection.createAnswer(); // Store for debugging
+                    console.log("Created remote answer:", remoteAnswer);
+
+
+                    console.log(`[Client] 🔄 Setting local description with remote answer...`);
+                    await peerConnection.setLocalDescription(remoteAnswer);
+
+                    ws.send(JSON.stringify({
+                        type: "renegotiate",
+                        clientid: sessionId,
+                        sessionDescription: {
+                            sdp: peerConnection.localDescription.sdp, // Use the updated local description
+                            type: "answer"
+                        }
+                    }));
+
+                } catch (error) {
+                    console.error(`[Client] ❌ Error during renegotiation:`, error);
+                }
+
+
+            } else if (message.type === 'error') {
+                console.error(`[Client] ❌ Server Error: ${message.message}`);
+            }
+            if (message.type == 'renegotiateResponse') {
+                console.log(message, "renegotiate response");
+            }
+
+        });
+
+        async function startWebRTC() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                document.getElementById('localVideo').srcObject = stream;
+                console.log(`[Client] 🎥 Local stream active.`, stream);
+
+
+
+                transceivers = stream.getTracks().map(track =>
+                    peerConnection.addTransceiver(track, { direction: "sendrecv" })
+                );
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                const trackData = {
+                    sessionDescription: { type: "offer", sdp: peerConnection.localDescription.sdp },
+                    tracks: transceivers.map(({ mid, sender }) => ({
+                        location: "local",
+                        mid,
+                        trackName: sender.track?.id || `track-${Date.now()}`
+                    }))
+                };
+
+                console.log(trackData);
+
+                ws.send(JSON.stringify({
+                    type: 'joinCall',
+                    clientId: clientId,
+                    trackData: trackData,
+                    roomId: ROOM_ID
+                }));
+
+            } catch (error) {
+                console.error(`[Client] ❌ Error:`, error);
+            }
+        }
+
+        function handleRemoteClient(message) {
+            console.log(message);
+            const clients = message.clients; // Assuming message.clients is the array
+
+clients.forEach(client => {
+    const remoteClientId = client.clientId;
+    const remoteSessionId = client.sessionId;
+    const trackName = client.track1;
+    const trackName1 = client.track2;
+
+    console.log(`[Client] 🧑‍🤝‍🧑 New Remote Client: ${remoteClientId}, Session: ${remoteSessionId}, track1: ${trackName}, track2: ${trackName1}`);
+});
+
+            setTimeout(() => {
+                console.log("[Client] 🔄 Pulling tracks from Calls API...");
+
+                if (transceivers.length === 0) {
+                    console.error("[Client] ❌ No transceivers available!");
+                    return;
+                }
+
+                const trackData = message?.clients?.flatMap(client => [
+    {
+        location: "remote",
+        sessionId: client.sessionId || "unknown",
+        trackName: client.track1 || "unknown"
+    },
+    {
+        location: "remote",
+        sessionId: client.sessionId || "unknown",
+        trackName: client.track2 || "unknown"
+    }
+]).filter(track => track.trackName !== "unknown"); // Remove if trackName is "unknown"
+
+
+                ws.send(JSON.stringify({
+                    type: "pullTracks",
+                    sessionId: sessionId,
+                    body: { tracks: trackData }
+                }));
+            }, 1000);
+        }
+
+        function generateClientId() {
+            return Math.random().toString(36).substring(2, 15);
+        }
+
+        // Control Buttons
+        const muteAudioButton = document.getElementById('muteAudio');
+        const muteVideoButton = document.getElementById('muteVideo');
+        const hangUpButton = document.getElementById('hangUp');
+
+        muteAudioButton.addEventListener('click', () => {
+            isAudioMuted = !isAudioMuted;
+            const audioTracks = document.getElementById('localVideo').srcObject?.getAudioTracks();
+            if (audioTracks) {
+                audioTracks.forEach(track => track.enabled = !isAudioMuted);
+            }
+            muteAudioButton.textContent = isAudioMuted ? 'Unmute Audio' : 'Mute Audio';
+        });
+
+        muteVideoButton.addEventListener('click', () => {
+            isVideoMuted = !isVideoMuted;
+            const videoTracks = document.getElementById('localVideo').srcObject?.getVideoTracks();
+            if (videoTracks) {
+                videoTracks.forEach(track => track.enabled = !isVideoMuted);
+            }
+            muteVideoButton.textContent = isVideoMuted ? 'Unmute Video' : 'Mute Video';
+        });
+
+        hangUpButton.addEventListener('click', () => {
+            // Implement hangup logic here (e.g., close peer connection, remove streams, etc.)
+            console.log('Hang Up clicked');
+            ws.close();
+            location.reload();
+        });
+    </script>
+</body>
+</html>
