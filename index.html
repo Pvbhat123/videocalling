@@ -104,7 +104,7 @@
     <h2>Remote Videos</h2>
     <div id="remoteVideos"></div>
     <script>
-        const ws = new WebSocket('https://8e40-106-51-84-228.ngrok-free.app'); // WebSocket connection
+        const ws = new WebSocket('ws://localhost:3000'); // WebSocket connection
         let clientId;
         let sessionId;
         let transceivers = [];
@@ -316,7 +316,7 @@ clients.forEach(client => {
     console.log(`[Client] 🧑‍🤝‍🧑 New Remote Client: ${remoteClientId}, Session: ${remoteSessionId}, track1: ${trackName}, track2: ${trackName1}`);
 });
 
-                setTimeout(() => {
+            setTimeout(() => {
                 console.log("[Client] 🔄 Pulling tracks from Calls API...");
 
                 if (transceivers.length === 0) {
@@ -343,7 +343,7 @@ clients.forEach(client => {
                     sessionId: sessionId,
                     body: { tracks: trackData }
                 }));
-         }, 1000);
+            }, 1000);
         }
 
         function generateClientId() {
